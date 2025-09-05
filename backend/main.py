@@ -4,7 +4,7 @@ import tempfile
 
 from openai import AzureOpenAI
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, Form
+from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.responses import JSONResponse
 from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
@@ -95,3 +95,69 @@ def criar_prompt_modelo_ameacas(tipo_aplicacao: str,
     """
 
     return prompt
+
+
+@app.post("/analisar_ameacas")
+async def analisar_ameacas(
+        imagem: UploadFile = File(...),
+        tipo_aplicacao: str = Form(...),
+        autenticacao: str = Form(...),
+        acesso_internet: bool = Form(...),
+        dados_sensiveis: bool = Form(...),
+        descricao_aplicacao: str = Form(...)
+):
+    try:
+        prompt = criar_prompt_modelo_ameacas(tipo_aplicacao,
+                                            autenticacao,
+                                            acesso_internet,
+                                            dados_sensiveis,
+                                            descricao_aplicacao)
+        
+
+        content = await imagem.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(imagem.filename).suffix) as temp_file:
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+
+
+        with open(temp_file_path, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode('ascii')
+
+        chat_prompt = [
+            {"role": "system", "content": "Você é uma IA especializada em cibersegurança e modelagem de ameaças utilizando a metodologia STRIDE."},
+            {"role": "user", "content": [
+                                        {
+                                            "type": "text", 
+                                            "text": prompt
+                                        },
+                                        {
+                                            "type": "image_url", 
+                                            "image_url": {
+                                                "url": f"data:image/png;base64,{encoded_string}"
+                                                }
+                                        },
+                                        {
+                                            "type": "text", 
+                                            "text": "Por favor, analise a imagem e o texto acima e forneça um modelo de ameaças detalhado."}
+                                         ]}
+        ]     
+
+        # Chama o modelo do GPT
+        response = client.chat.completions.create(
+            messages = chat_prompt,
+            temperature=0.7,
+            max_tokens=1500,
+            top_p=0.95,
+            frequency_penalty=0,
+            presence_penalty=0,
+            stop=None,
+            stream=False,
+            model=AZURE_OPENAI_DEPLOYMENT_NAME
+        )
+
+        os.remove(temp_file_path)
+        
+        return JSONResponse(content=response.to_dict(), status_code=200)
+
+    except Exception as E:
+        return JSONResponse(content={"error": str(E)}, status_code=500)
